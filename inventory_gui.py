@@ -21,10 +21,10 @@ from inventory_core import (
 )
 
 SAMPLE_NVR = (
-    "http://192.168.22.252\n"
-    "http://192.168.22.253\n"
-    "# 也可写：地址\\t用户名\\t密码\\t备注\n"
-    "# 192.168.22.254\tadmin\tYourPass\t三号楼\n"
+    "http://192.168.23.251\n"
+    "http://192.168.23.252\n"
+    "http://192.168.23.253\n"
+    "http://192.168.23.254\n"
 )
 
 SAMPLE_IP = (
@@ -52,8 +52,8 @@ class App(tk.Tk):
         root.pack(fill=tk.BOTH, expand=True, **pad)
 
         tip = (
-            "可填多台录像机（每行一台）。列表里显示为「252录像机」这类短名，避免机型名重复。\n"
-            "双击任意表格里的监控 IP → 打开摄像头网页；勾选「尝试带账号打开」可尽量自动带登录（部分浏览器会拦截）。"
+            "可填多台录像机（每行一台）。短名如「251录像机」。拉取时会读录像机上报的摄像头在线状态。\n"
+            "双击监控 IP → 打开摄像头网页；勾选「尝试带账号打开」可尽量自动带登录（部分浏览器会拦截）。"
         )
         ttk.Label(root, text=tip, justify=tk.LEFT).pack(anchor="w", pady=(0, 6))
 
@@ -66,15 +66,23 @@ class App(tk.Tk):
         self.nvr_pass = tk.StringVar(value="")
         self.timeout = tk.StringVar(value="25")
         self.embed_auth = tk.BooleanVar(value=True)
+        self.check_online = tk.BooleanVar(value=True)
 
         self._pair(form, 0, 0, "默认用户名", self.nvr_user)
         self._pair(form, 0, 2, "默认密码", self.nvr_pass, show="*")
         self._pair(form, 1, 0, "超时(秒)", self.timeout)
+        opt_row = ttk.Frame(form)
+        opt_row.grid(row=1, column=2, columnspan=2, sticky="w", pady=2)
         ttk.Checkbutton(
-            form,
-            text="双击 IP 时尝试带账号打开网页（http://用户:密码@IP）",
+            opt_row,
+            text="拉取时检测摄像头在线",
+            variable=self.check_online,
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            opt_row,
+            text="双击 IP 尝试带账号打开",
             variable=self.embed_auth,
-        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=2)
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         ttk.Label(root, text="录像机列表（每行一台）").pack(anchor="w", pady=(8, 2))
         self.nvr_text = tk.Text(root, height=5, font=("Consolas", 10))
@@ -96,8 +104,11 @@ class App(tk.Tk):
         ttk.Button(btns, text="只看重复 IP", command=self.focus_duplicates).pack(
             side=tk.LEFT, padx=8
         )
-        ttk.Button(btns, text="显示全部通道", command=self.show_all_channels).pack(
+        ttk.Button(btns, text="只看离线", command=self.focus_offline).pack(
             side=tk.LEFT
+        )
+        ttk.Button(btns, text="显示全部通道", command=self.show_all_channels).pack(
+            side=tk.LEFT, padx=8
         )
         ttk.Label(btns, text="筛选录像机").pack(side=tk.LEFT, padx=(16, 4))
         self.nvr_filter = ttk.Combobox(
@@ -134,9 +145,9 @@ class App(tk.Tk):
         nb.add(tab_ch, text="全部通道")
         ch_frm = ttk.Frame(tab_ch)
         ch_frm.pack(fill=tk.BOTH, expand=True)
-        cols = ("录像机", "通道", "IP", "名称", "协议", "管理端口", "源通道", "码流")
+        cols = ("录像机", "通道", "在线", "IP", "名称", "协议", "管理端口", "源通道", "码流")
         self.tree = ttk.Treeview(ch_frm, columns=cols, show="headings", height=12)
-        widths = (140, 60, 130, 200, 90, 70, 60, 70)
+        widths = (110, 55, 55, 120, 180, 80, 70, 55, 60)
         for c, w in zip(cols, widths):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="w")
@@ -146,6 +157,9 @@ class App(tk.Tk):
         sy.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.tag_configure("dup", foreground="#a33")
         self.tree.tag_configure("empty", foreground="#888888")
+        self.tree.tag_configure("online", foreground="#0a7a32")
+        self.tree.tag_configure("offline", foreground="#a33")
+        self.tree.tag_configure("unknown", foreground="#888888")
         self.tree.bind("<Double-1>", self._on_channel_double_click)
 
         # --- tab: per-NVR status ---
@@ -153,9 +167,9 @@ class App(tk.Tk):
         nb.add(tab_nvr, text="各机状态")
         nvr_frm = ttk.Frame(tab_nvr)
         nvr_frm.pack(fill=tk.BOTH, expand=True)
-        ncols = ("状态", "短名", "地址", "通道数", "设备型号名", "说明")
+        ncols = ("状态", "短名", "地址", "通道数", "在线", "离线", "设备型号名", "说明")
         self.nvr_tree = ttk.Treeview(nvr_frm, columns=ncols, show="headings", height=12)
-        for c, w in zip(ncols, (70, 100, 200, 70, 180, 280)):
+        for c, w in zip(ncols, (60, 90, 180, 60, 50, 50, 140, 220)):
             self.nvr_tree.heading(c, text=c)
             self.nvr_tree.column(c, width=w, anchor="w")
         sy3 = ttk.Scrollbar(nvr_frm, orient=tk.VERTICAL, command=self.nvr_tree.yview)
@@ -355,7 +369,12 @@ class App(tk.Tk):
             f"将拉取 {len(result.items)} 台：\n\n" + "\n".join(lines) + more + warn + skip,
         )
 
-    def _selected_channels(self, report: InventoryReport, only_dup: bool = False):
+    def _selected_channels(
+        self,
+        report: InventoryReport,
+        only_dup: bool = False,
+        only_offline: bool = False,
+    ):
         dup_ips = {g.ip for g in report.duplicates}
         filt = self._filter_nvr.get().strip()
         rows = report.channels
@@ -363,16 +382,29 @@ class App(tk.Tk):
             rows = [ch for ch in rows if ch.nvr_display == filt or ch.nvr_url == filt]
         if only_dup:
             rows = [ch for ch in rows if ch.ip in dup_ips]
+        if only_offline:
+            rows = [ch for ch in rows if ch.online is False]
         return rows, dup_ips
 
     def _fill_channel_tree(
-        self, report: InventoryReport, only_dup: bool = False
+        self,
+        report: InventoryReport,
+        only_dup: bool = False,
+        only_offline: bool = False,
     ) -> None:
         for i in self.tree.get_children():
             self.tree.delete(i)
-        rows, dup_ips = self._selected_channels(report, only_dup=only_dup)
+        rows, dup_ips = self._selected_channels(
+            report, only_dup=only_dup, only_offline=only_offline
+        )
         for ch in rows:
             tags: list[str] = []
+            if ch.online is False:
+                tags.append("offline")
+            elif ch.online is True:
+                tags.append("online")
+            else:
+                tags.append("unknown")
             if ch.ip in dup_ips:
                 tags.append("dup")
             if not ch.ip:
@@ -383,6 +415,7 @@ class App(tk.Tk):
                 values=(
                     ch.nvr_display,
                     f"D{ch.channel_id}",
+                    ch.online_label,
                     ch.ip or "-",
                     ch.name or "",
                     ch.protocol or "",
@@ -401,6 +434,9 @@ class App(tk.Tk):
                 r.channels[0].nvr_display if r.channels else r.opt.base_url
             )
             if r.ok:
+                note = ""
+                if not r.status_checked:
+                    note = "未取到在线状态"
                 self.nvr_tree.insert(
                     "",
                     tk.END,
@@ -409,8 +445,10 @@ class App(tk.Tk):
                         short,
                         r.opt.base_url,
                         len(r.channels),
+                        r.online_count if r.status_checked else "-",
+                        r.offline_count if r.status_checked else "-",
                         r.device_name or "",
-                        "",
+                        note,
                     ),
                     tags=("ok",),
                 )
@@ -423,6 +461,8 @@ class App(tk.Tk):
                         short,
                         r.opt.base_url,
                         0,
+                        "-",
+                        "-",
                         "",
                         r.error[:200],
                     ),
@@ -445,31 +485,42 @@ class App(tk.Tk):
 
         self._fill_channel_tree(report)
         self._fill_nvr_tree(report)
+        online_part = ""
+        if report.checked_online or report.offline_count or report.online_count:
+            online_part = (
+                f"  ·  在线 {report.online_count}  ·  离线 {report.offline_count}"
+            )
+            if report.unknown_online_count:
+                online_part += f"  ·  未知 {report.unknown_online_count}"
         self.summary.set(
             f"{report.nvr_ok} 台成功"
             + (f" / {report.nvr_fail} 台失败" if report.nvr_fail else "")
             + f"  ·  监控总数 {report.total} 路  ·  "
             f"有效 IP {report.with_ip}  ·  唯一 IP {report.unique_ips}"
             + (f"  ·  无 IP {report.empty_ip}" if report.empty_ip else "")
+            + online_part
         )
+        banners: list[str] = []
+        if report.offline_count:
+            banners.append(f"⚠ 离线 {report.offline_count} 路（可点「只看离线」）")
         if report.duplicates:
             parts = []
-            for g in report.duplicates[:10]:
+            for g in report.duplicates[:8]:
                 ds = "、".join(c.channel_label() for c in g.channels)
                 parts.append(f"{g.ip}→{ds}")
             more = (
                 ""
-                if len(report.duplicates) <= 10
+                if len(report.duplicates) <= 8
                 else f" …等共 {len(report.duplicates)} 组"
             )
-            self.dup_banner.set(
-                f"⚠ IP 重复 {len(report.duplicates)} 组（含跨机）："
-                + "；".join(parts)
-                + more
+            banners.append(
+                f"IP 重复 {len(report.duplicates)} 组：" + "；".join(parts) + more
             )
+        if banners:
+            self.dup_banner.set("  |  ".join(banners))
             self.dup_lbl.configure(foreground="#a33")
         else:
-            self.dup_banner.set("✓ 无重复 IP（含跨机）")
+            self.dup_banner.set("✓ 无离线 · 无重复 IP")
             self.dup_lbl.configure(foreground="#0a7a32")
 
     def fetch_all(self) -> None:
@@ -497,13 +548,29 @@ class App(tk.Tk):
             self.append_log(s)
 
         targets = parsed.items
+        check_online = self.check_online.get()
 
         def worker() -> None:
             try:
-                report = fetch_multi_inventory(targets, on_log=self.append_log)
+                report = fetch_multi_inventory(
+                    targets,
+                    on_log=self.append_log,
+                    check_online=check_online,
+                )
 
                 def done() -> None:
                     self._apply_report(report)
+                    if check_online:
+                        for ch in report.channels:
+                            if ch.online is False:
+                                self.append_log(
+                                    f"离线 {ch.channel_label()}  {ch.ip}  {ch.name}"
+                                    + (f"  ({ch.online_detail})" if ch.online_detail else "")
+                                )
+                        if report.offline_count == 0 and report.online_count:
+                            self.append_log(
+                                f"摄像头均在线：{report.online_count} 路"
+                            )
                     for g in report.duplicates:
                         ds = "、".join(
                             f"{c.channel_label()}({c.name or '-'})" for c in g.channels
@@ -514,6 +581,11 @@ class App(tk.Tk):
                     self.status.set(
                         f"拉取完成 · {report.nvr_ok}/{report.nvr_ok + report.nvr_fail} 台 · "
                         f"{report.total} 路"
+                        + (
+                            f" · 离线 {report.offline_count}"
+                            if check_online
+                            else ""
+                        )
                     )
                     if report.nvr_fail and report.nvr_ok == 0:
                         messagebox.showerror(
@@ -554,11 +626,21 @@ class App(tk.Tk):
             f"仅显示重复 IP · {len(self._report.duplicates)} 组"
         )
 
+    def focus_offline(self) -> None:
+        if not self._report:
+            messagebox.showinfo("提示", "请先一键拉取")
+            return
+        if self._report.offline_count == 0:
+            messagebox.showinfo("离线", "当前没有检测到离线通道")
+            return
+        self._fill_channel_tree(self._report, only_offline=True)
+        self.status.set(f"仅显示离线 · {self._report.offline_count} 路")
+
     def show_all_channels(self) -> None:
         if not self._report:
             messagebox.showinfo("提示", "请先一键拉取")
             return
-        self._fill_channel_tree(self._report, only_dup=False)
+        self._fill_channel_tree(self._report)
         filt = self._filter_nvr.get()
         self.status.set(
             f"显示通道 · 筛选「{filt}」· 共 {self._report.total} 路"

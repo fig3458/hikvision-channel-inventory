@@ -1,4 +1,4 @@
-# AIGC START
+﻿# AIGC START
 """Hikvision multi-NVR channel inventory: list, duplicate IP check, IP-table compare."""
 from __future__ import annotations
 
@@ -38,10 +38,20 @@ class LiveChannel:
     addressing: str = ""
     nvr_url: str = ""
     nvr_label: str = ""
+    online: bool | None = None  # None = 鏈娴?/ 鏈煡
+    online_detail: str = ""
 
     @property
     def nvr_display(self) -> str:
         return self.nvr_label or self.nvr_url or "-"
+
+    @property
+    def online_label(self) -> str:
+        if self.online is True:
+            return "鍦ㄧ嚎"
+        if self.online is False:
+            return "绂荤嚎"
+        return "鏈煡"
 
     def channel_label(self) -> str:
         return f"{self.nvr_display}/D{self.channel_id}"
@@ -91,6 +101,9 @@ class NvrFetchResult:
     device_name: str = ""
     channels: list[LiveChannel] = field(default_factory=list)
     error: str = ""
+    status_checked: bool = False
+    online_count: int = 0
+    offline_count: int = 0
 
 
 @dataclass
@@ -105,6 +118,10 @@ class InventoryReport:
     duplicates: list[DuplicateGroup]
     nvr_ok: int = 0
     nvr_fail: int = 0
+    online_count: int = 0
+    offline_count: int = 0
+    unknown_online_count: int = 0
+    checked_online: bool = False
     per_nvr: list[NvrFetchResult] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -113,7 +130,7 @@ class InventoryReport:
 class CompareRow:
     ip: str
     name: str
-    status: str  # 已存在 / 未添加 / 表中重复
+    status: str  # 宸插瓨鍦?/ 鏈坊鍔?/ 琛ㄤ腑閲嶅
     channels: str
     nvr_names: str
 
@@ -130,12 +147,12 @@ class CompareReport:
 def normalize_base_url(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
-        raise ValueError("录像机地址不能为空")
+        raise ValueError("褰曞儚鏈哄湴鍧€涓嶈兘涓虹┖")
     if "://" not in raw:
         raw = "http://" + raw
     parsed = urlparse(raw)
     if not parsed.hostname:
-        raise ValueError("录像机地址无效")
+        raise ValueError("褰曞儚鏈哄湴鍧€鏃犳晥")
     base = f"{parsed.scheme}://{parsed.hostname}"
     if parsed.port:
         base += f":{parsed.port}"
@@ -143,12 +160,12 @@ def normalize_base_url(text: str) -> str:
 
 
 def nvr_ip_label(base_url: str) -> str:
-    """Stable short name from NVR host, e.g. 192.168.23.252 → 252录像机."""
+    """Stable short name from NVR host, e.g. 192.168.23.252 鈫?252褰曞儚鏈?"""
     host = urlparse(base_url).hostname if "://" in (base_url or "") else (base_url or "")
     host = (host or "").strip()
     if IP_RE.fullmatch(host):
-        return f"{host.rsplit('.', 1)[-1]}录像机"
-    return host or base_url or "录像机"
+        return f"{host.rsplit('.', 1)[-1]}褰曞儚鏈?
+    return host or base_url or "褰曞儚鏈?
 
 
 def build_camera_web_url(
@@ -160,7 +177,7 @@ def build_camera_web_url(
 ) -> str:
     """Camera web UI URL. embed_auth may auto-fill Basic/Digest on some browsers."""
     if not IP_RE.fullmatch(ip or ""):
-        raise ValueError(f"无效 IP：{ip}")
+        raise ValueError(f"鏃犳晥 IP锛歿ip}")
     host = ip if http_port == 80 else f"{ip}:{http_port}"
     if embed_auth and user:
         # browsers may strip credentials; still best-effort for digest/basic
@@ -223,9 +240,9 @@ def parse_nvr_list(
     Formats:
       http://192.168.1.10
       192.168.1.10
-      192.168.1.10\\t备注名
-      192.168.1.10\\tadmin\\t密码
-      192.168.1.10\\tadmin\\t密码\\t备注名
+      192.168.1.10\\t澶囨敞鍚?
+      192.168.1.10\\tadmin\\t瀵嗙爜
+      192.168.1.10\\tadmin\\t瀵嗙爜\\t澶囨敞鍚?
     """
     items: list[NvrOptions] = []
     skipped: list[str] = []
@@ -237,7 +254,7 @@ def parse_nvr_list(
         if not line or line.startswith("#"):
             continue
         low = line.lower()
-        if low.startswith("地址") or low.startswith("url") or low.startswith("录像机"):
+        if low.startswith("鍦板潃") or low.startswith("url") or low.startswith("褰曞儚鏈?):
             continue
 
         cols = [c for c in _split_row(line) if c != ""]
@@ -248,7 +265,7 @@ def parse_nvr_list(
         try:
             base = normalize_base_url(addr)
         except ValueError:
-            skipped.append(f"地址无效，跳过：{line[:80]}")
+            skipped.append(f"鍦板潃鏃犳晥锛岃烦杩囷細{line[:80]}")
             continue
 
         user = default_user
@@ -267,10 +284,10 @@ def parse_nvr_list(
             user, password, label = cols[1], cols[2], cols[3]
 
         if not user or not password:
-            skipped.append(f"缺用户名/密码，跳过：{base}")
+            skipped.append(f"缂虹敤鎴峰悕/瀵嗙爜锛岃烦杩囷細{base}")
             continue
         if base in seen:
-            warnings.append(f"录像机地址重复，已忽略：{base}")
+            warnings.append(f"褰曞儚鏈哄湴鍧€閲嶅锛屽凡蹇界暐锛歿base}")
             continue
         seen.add(base)
         if not label:
@@ -286,6 +303,15 @@ def parse_nvr_list(
         )
 
     return ParseNvrResult(items=items, skipped=skipped, warnings=warnings)
+
+
+def _parse_bool_flag(text: str) -> bool | None:
+    t = (text or "").strip().lower()
+    if t in {"true", "1", "yes", "online", "connected", "ok", "normal"}:
+        return True
+    if t in {"false", "0", "no", "offline", "disconnected", "error", "fail"}:
+        return False
+    return None
 
 
 def parse_channel_list(
@@ -331,6 +357,47 @@ def parse_channel_list(
     return channels
 
 
+def parse_channel_status_list(xml_text: str) -> dict[int, tuple[bool | None, str]]:
+    """Parse GET /ISAPI/ContentMgmt/InputProxy/channels/status 鈫?{id: (online, detail)}."""
+    root = ET.fromstring(xml_text)
+    out: dict[int, tuple[bool | None, str]] = {}
+    nodes = [
+        el
+        for el in root.iter()
+        if _local(el.tag).lower() == "inputproxychannelstatus"
+    ]
+    if not nodes and _local(root.tag).lower() == "inputproxychannelstatus":
+        nodes = [root]
+    for el in nodes:
+        cid_text = _child_text(el, "id") or _find_text(el, {"id"})
+        if not cid_text.isdigit():
+            continue
+        cid = int(cid_text)
+        online_raw = (
+            _child_text(el, "online")
+            or _find_text(el, {"online", "connstatus", "connectionstate", "chanstatus"})
+        )
+        online = _parse_bool_flag(online_raw)
+        detect = _find_text(el, {"chandetectresult", "detectresult", "errordescription"})
+        stream = _find_text(el, {"streamingchannelstatus", "streamstatus"})
+        parts = []
+        if online_raw:
+            parts.append(f"online={online_raw}")
+        if detect:
+            parts.append(detect)
+        if stream and stream.lower() not in {"true", "false"}:
+            parts.append(stream)
+        # Some firmwares omit <online> but put result in chanDetectResult
+        if online is None and detect:
+            low = detect.lower()
+            if any(k in low for k in ("ok", "normal", "success", "connected")):
+                online = True
+            elif any(k in low for k in ("fail", "error", "offline", "timeout", "disconnect")):
+                online = False
+        out[cid] = (online, " ".join(parts).strip())
+    return out
+
+
 def parse_ip_table(text: str) -> ParseIpResult:
     """Parse Excel paste / CSV: camera IP + optional name / note."""
     items: list[IpRow] = []
@@ -342,7 +409,7 @@ def parse_ip_table(text: str) -> ParseIpResult:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("监控") or line.startswith("IP") or line.startswith("通道"):
+        if line.startswith("鐩戞帶") or line.startswith("IP") or line.startswith("閫氶亾"):
             continue
         if line.lower().startswith("ip"):
             continue
@@ -360,13 +427,13 @@ def parse_ip_table(text: str) -> ParseIpResult:
                 extras.append(col)
 
         if not ip:
-            skipped.append(f"无 IP，跳过：{line[:80]}")
+            skipped.append(f"鏃?IP锛岃烦杩囷細{line[:80]}")
             continue
 
         name = extras[0] if extras else ""
         note = " ".join(extras[1:]) if len(extras) > 1 else ""
         if ip in seen:
-            warnings.append(f"IP 表内重复：{ip}（第 {seen[ip]} 行与后续行）")
+            warnings.append(f"IP 琛ㄥ唴閲嶅锛歿ip}锛堢 {seen[ip]} 琛屼笌鍚庣画琛岋級")
         else:
             seen[ip] = len(items) + 1
         items.append(IpRow(ip=ip, name=name, note=note, raw_line=line))
@@ -405,9 +472,18 @@ def build_inventory_from_channels(
     ]
     notes: list[str] = []
     if duplicates:
-        notes.append(f"发现 {len(duplicates)} 个重复 IP（含跨录像机）")
+        notes.append(f"鍙戠幇 {len(duplicates)} 涓噸澶?IP锛堝惈璺ㄥ綍鍍忔満锛?)
     if empty_ip:
-        notes.append(f"{empty_ip} 路无有效 IP")
+        notes.append(f"{empty_ip} 璺棤鏈夋晥 IP")
+
+    online_n = sum(1 for c in ordered if c.online is True)
+    offline_n = sum(1 for c in ordered if c.online is False)
+    unknown_n = sum(1 for c in ordered if c.online is None)
+    checked = any(r.status_checked for r in (per_nvr or [])) or any(
+        c.online is not None for c in ordered
+    )
+    if offline_n:
+        notes.append(f"{offline_n} 璺绾?)
 
     results = per_nvr or []
     nvr_ok = sum(1 for r in results if r.ok)
@@ -417,7 +493,7 @@ def build_inventory_from_channels(
             ok_one = next(r for r in results if r.ok)
             device_name = ok_one.device_name or ok_one.opt.label
         else:
-            device_name = f"{nvr_ok} 台录像机"
+            device_name = f"{nvr_ok} 鍙板綍鍍忔満"
 
     return InventoryReport(
         device_name=device_name,
@@ -429,6 +505,10 @@ def build_inventory_from_channels(
         duplicates=duplicates,
         nvr_ok=nvr_ok,
         nvr_fail=nvr_fail,
+        online_count=online_n,
+        offline_count=offline_n,
+        unknown_online_count=unknown_n,
+        checked_online=checked,
         per_nvr=results,
         notes=notes,
     )
@@ -458,10 +538,10 @@ def compare_ip_table(
     exist = missing = table_dup = 0
 
     def _ch_text(live: list[LiveChannel]) -> str:
-        return "、".join(c.channel_label() for c in live) or "-"
+        return "銆?.join(c.channel_label() for c in live) or "-"
 
     def _name_text(live: list[LiveChannel]) -> str:
-        return "、".join(c.name for c in live if c.name) or "-"
+        return "銆?.join(c.name for c in live if c.name) or "-"
 
     for item in table:
         if item.ip in seen_in_table:
@@ -471,7 +551,7 @@ def compare_ip_table(
                 CompareRow(
                     ip=item.ip,
                     name=item.name,
-                    status="表中重复",
+                    status="琛ㄤ腑閲嶅",
                     channels=_ch_text(live),
                     nvr_names=_name_text(live),
                 )
@@ -481,10 +561,10 @@ def compare_ip_table(
         live = by_ip.get(item.ip, [])
         if live:
             exist += 1
-            status = "已存在"
+            status = "宸插瓨鍦?
         else:
             missing += 1
-            status = "未添加"
+            status = "鏈坊鍔?
         rows.append(
             CompareRow(
                 ip=item.ip,
@@ -511,7 +591,7 @@ def compare_ip_table(
 
 
 def export_channels_tsv(channels: list[LiveChannel]) -> str:
-    lines = ["录像机\t地址\t通道\tIP\t名称\t协议\t管理端口\t源通道\t码流\t用户名"]
+    lines = ["褰曞儚鏈篭t鍦板潃\t閫氶亾\t鍦ㄧ嚎\tIP\t鍚嶇О\t鍗忚\t绠＄悊绔彛\t婧愰€氶亾\t鐮佹祦\t鐢ㄦ埛鍚峔t鍦ㄧ嚎璇︽儏"]
     for ch in channels:
         lines.append(
             "\t".join(
@@ -519,6 +599,7 @@ def export_channels_tsv(channels: list[LiveChannel]) -> str:
                     ch.nvr_label or "",
                     ch.nvr_url or "",
                     f"D{ch.channel_id}",
+                    ch.online_label,
                     ch.ip or "",
                     ch.name or "",
                     ch.protocol or "",
@@ -526,6 +607,7 @@ def export_channels_tsv(channels: list[LiveChannel]) -> str:
                     ch.src_input_port or "",
                     ch.stream_type or "",
                     ch.user_name or "",
+                    ch.online_detail or "",
                 ]
             )
         )
@@ -533,19 +615,19 @@ def export_channels_tsv(channels: list[LiveChannel]) -> str:
 
 
 def export_compare_tsv(report: CompareReport) -> str:
-    lines = ["状态\tIP\t表中名称\t所在通道\t通道名称"]
+    lines = ["鐘舵€乗tIP\t琛ㄤ腑鍚嶇О\t鎵€鍦ㄩ€氶亾\t閫氶亾鍚嶇О"]
     for r in report.rows:
         lines.append(
             "\t".join([r.status, r.ip, r.name or "", r.channels, r.nvr_names])
         )
     if report.orphan_on_nvr:
         lines.append("")
-        lines.append("# 录像机有、表中没有")
+        lines.append("# 褰曞儚鏈烘湁銆佽〃涓病鏈?)
         for ch in report.orphan_on_nvr:
             lines.append(
                 "\t".join(
                     [
-                        "仅录像机",
+                        "浠呭綍鍍忔満",
                         ch.ip,
                         "",
                         ch.channel_label(),
@@ -572,7 +654,7 @@ class NvrClient:
         data = body.encode("utf-8") if body is not None else None
         headers = {
             "Accept": "application/xml, text/xml, */*",
-            "User-Agent": "HikvisionChannelInventory/1.0",
+            "User-Agent": "HikvisionChannelInventory/1.1",
         }
         if body is not None:
             headers["Content-Type"] = 'application/xml; charset="UTF-8"'
@@ -592,7 +674,7 @@ class NvrClient:
     def ping(self) -> str:
         code, text = self.request("GET", "/ISAPI/System/deviceInfo")
         if code >= 400:
-            raise RuntimeError(f"登录录像机失败 HTTP {code}：{text[:200]}")
+            raise RuntimeError(f"鐧诲綍褰曞儚鏈哄け璐?HTTP {code}锛歿text[:200]}")
         try:
             root = ET.fromstring(text)
             name = _find_text(root, {"deviceName", "model"})
@@ -603,22 +685,58 @@ class NvrClient:
     def list_channels(self) -> dict[int, LiveChannel]:
         code, text = self.request("GET", "/ISAPI/ContentMgmt/InputProxy/channels")
         if code >= 400:
-            raise RuntimeError(f"读取通道列表失败 HTTP {code}：{text[:200]}")
+            raise RuntimeError(f"璇诲彇閫氶亾鍒楄〃澶辫触 HTTP {code}锛歿text[:200]}")
         label = self.opt.label or nvr_ip_label(self.base_url)
         return parse_channel_list(text, nvr_url=self.base_url, nvr_label=label)
 
-    def fetch_inventory(self) -> InventoryReport:
+    def list_channel_status(self) -> dict[int, tuple[bool | None, str]]:
+        """NVR-reported camera online status for digital channels."""
+        code, text = self.request(
+            "GET", "/ISAPI/ContentMgmt/InputProxy/channels/status"
+        )
+        if code >= 400:
+            raise RuntimeError(f"璇诲彇閫氶亾鍦ㄧ嚎鐘舵€佸け璐?HTTP {code}锛歿text[:200]}")
+        return parse_channel_status_list(text)
+
+    def apply_online_status(self, channels: dict[int, LiveChannel]) -> tuple[int, int]:
+        """Fill online flags; return (online_count, offline_count)."""
+        status = self.list_channel_status()
+        online_n = offline_n = 0
+        for cid, ch in channels.items():
+            if cid not in status:
+                continue
+            flag, detail = status[cid]
+            ch.online = flag
+            ch.online_detail = detail
+            if flag is True:
+                online_n += 1
+            elif flag is False:
+                offline_n += 1
+        return online_n, offline_n
+
+    def fetch_inventory(self, check_online: bool = True) -> InventoryReport:
         name = self.ping()
         channels = self.list_channels()
         label = self.opt.label or nvr_ip_label(self.base_url)
+        status_checked = False
+        online_n = offline_n = 0
         for ch in channels.values():
             ch.nvr_label = label
             ch.nvr_url = self.base_url
+        if check_online and channels:
+            try:
+                online_n, offline_n = self.apply_online_status(channels)
+                status_checked = True
+            except Exception:
+                status_checked = False
         result = NvrFetchResult(
             opt=self.opt,
             ok=True,
             device_name=name,
             channels=list(channels.values()),
+            status_checked=status_checked,
+            online_count=online_n,
+            offline_count=offline_n,
         )
         return build_inventory_from_channels(
             list(channels.values()),
@@ -627,7 +745,7 @@ class NvrClient:
         )
 
 
-def _fetch_one(opt: NvrOptions) -> NvrFetchResult:
+def _fetch_one(opt: NvrOptions, check_online: bool = True) -> NvrFetchResult:
     try:
         client = NvrClient(opt)
         name = client.ping()
@@ -636,11 +754,26 @@ def _fetch_one(opt: NvrOptions) -> NvrFetchResult:
         for ch in channels.values():
             ch.nvr_label = label
             ch.nvr_url = opt.base_url
+        status_checked = False
+        online_n = offline_n = 0
+        if check_online and channels:
+            try:
+                online_n, offline_n = client.apply_online_status(channels)
+                status_checked = True
+            except Exception as exc:  # noqa: BLE001
+                # channel list still usable; mark status unknown
+                for ch in channels.values():
+                    if ch.online_detail == "":
+                        ch.online_detail = f"鐘舵€佹帴鍙ｅけ璐ワ細{exc}"
+                status_checked = False
         return NvrFetchResult(
             opt=opt,
             ok=True,
             device_name=name,
             channels=list(channels.values()),
+            status_checked=status_checked,
+            online_count=online_n,
+            offline_count=offline_n,
         )
     except Exception as exc:  # noqa: BLE001
         return NvrFetchResult(opt=opt, ok=False, error=str(exc))
@@ -650,18 +783,22 @@ def fetch_multi_inventory(
     targets: list[NvrOptions],
     on_log: LogFn | None = None,
     max_workers: int = 6,
+    check_online: bool = True,
 ) -> InventoryReport:
     """Fetch channels from many NVRs in parallel; merge + cross-NVR duplicate check."""
     log = on_log or (lambda _m: None)
     if not targets:
-        raise ValueError("没有可拉取的录像机")
+        raise ValueError("娌℃湁鍙媺鍙栫殑褰曞儚鏈?)
 
     results: list[NvrFetchResult] = []
     workers = max(1, min(max_workers, len(targets)))
-    log(f"开始拉取 {len(targets)} 台录像机（并行 {workers}）…")
+    tip = "骞舵娴嬫憚鍍忓ご鍦ㄧ嚎鐘舵€? if check_online else "涓嶆娴嬪湪绾?
+    log(f"寮€濮嬫媺鍙?{len(targets)} 鍙板綍鍍忔満锛堝苟琛?{workers}锛寋tip}锛夆€?)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(_fetch_one, opt): opt for opt in targets}
+        futs = {
+            pool.submit(_fetch_one, opt, check_online): opt for opt in targets
+        }
         for fut in as_completed(futs):
             opt = futs[fut]
             try:
@@ -671,9 +808,15 @@ def fetch_multi_inventory(
             results.append(res)
             tag = res.opt.label or res.opt.base_url
             if res.ok:
-                log(f"✓ {tag}（{res.device_name}）· {len(res.channels)} 路")
+                extra = ""
+                if check_online:
+                    if res.status_checked:
+                        extra = f" 路 鍦ㄧ嚎 {res.online_count} / 绂荤嚎 {res.offline_count}"
+                    else:
+                        extra = " 路 鍦ㄧ嚎鐘舵€佹湭鍙栧埌"
+                log(f"鉁?{tag}锛坽res.device_name}锛壜?{len(res.channels)} 璺瘂extra}")
             else:
-                log(f"✗ {tag} 失败：{res.error}")
+                log(f"鉁?{tag} 澶辫触锛歿res.error}")
 
     # stable order: original target order
     by_url = {r.opt.base_url: r for r in results}
@@ -684,11 +827,17 @@ def fetch_multi_inventory(
 
     report = build_inventory_from_channels(all_channels, per_nvr=ordered_results)
     log(
-        f"合计：成功 {report.nvr_ok} 台 / 失败 {report.nvr_fail} 台 · "
-        f"监控 {report.total} 路 · 唯一 IP {report.unique_ips} · "
-        f"重复 IP {len(report.duplicates)} 组"
+        f"鍚堣锛氭垚鍔?{report.nvr_ok} 鍙?/ 澶辫触 {report.nvr_fail} 鍙?路 "
+        f"鐩戞帶 {report.total} 璺?路 鍞竴 IP {report.unique_ips} 路 "
+        f"閲嶅 IP {len(report.duplicates)} 缁?
+        + (
+            f" 路 鍦ㄧ嚎 {report.online_count} / 绂荤嚎 {report.offline_count}"
+            if check_online
+            else ""
+        )
     )
     return report
 
 
 # AIGC END
+
